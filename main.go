@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync/atomic"
 )
 
@@ -66,13 +67,25 @@ func respondWithJSON[T any](w http.ResponseWriter, code int, payload T) {
 	w.Write(dat)
 }
 
+func cleanStr(input string, bad string) string {
+	out := []string{}
+	for str := range strings.SplitSeq(input, " ") {
+		if strings.ToLower(str) == bad {
+			out = append(out, "****")
+		} else {
+			out = append(out, str)
+		}
+	}
+	return strings.Join(out, " ")
+}
+
 func validateChirp(w http.ResponseWriter, r *http.Request) {
 	type params struct {
 		Body string `json:"body"`
 	}
 
 	type ok struct {
-		Valid bool `json:"valid"`
+		Cleaned_Body string `json:"cleaned_body"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -88,7 +101,7 @@ func validateChirp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondWithJSON[ok](w, 200, ok{Valid: true})
+	respondWithJSON(w, 200, ok{Cleaned_Body: cleanStr(cleanStr(cleanStr(args.Body, "kerfuffle"), "sharbert"), "fornax")})
 
 }
 
