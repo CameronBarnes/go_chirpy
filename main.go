@@ -1,26 +1,34 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
+
+	"github.com/cameronbarnes/go_chirpy/internal/database"
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 )
 
-type stats struct {
+type apiConfig struct {
 	fileserverHits atomic.Int32
+	db             *database.Queries
 }
 
-func (stats *stats) middlewareMetricsInc(next http.Handler) http.Handler {
+func (c *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		stats.fileserverHits.Add(1)
+		c.fileserverHits.Add(1)
 		next.ServeHTTP(w, r)
 	})
 }
 
-func (stats *stats) hitsMetricsHandler(w http.ResponseWriter, _ *http.Request) {
+func (c *apiConfig) hitsMetricsHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(200)
 	fmt.Fprintf(w, `<html>
@@ -28,20 +36,49 @@ func (stats *stats) hitsMetricsHandler(w http.ResponseWriter, _ *http.Request) {
     <h1>Welcome, Chirpy Admin</h1>
     <p>Chirpy has been visited %d times!</p>
   </body>
-</html>`, stats.fileserverHits.Load())
+</html>`, c.fileserverHits.Load())
 }
 
-func (stats *stats) resetMetricsHandler(w http.ResponseWriter, _ *http.Request) {
-	stats.fileserverHits.Store(0)
+func (c *apiConfig) resetHandler(w http.ResponseWriter, _ *http.Request) {
+	c.fileserverHits.Store(0)
+	c.db.DeleteAll(context.Background())
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(200)
 	w.Write([]byte("OK"))
+}
+
+func (c *apiConfig) addUser(w http.ResponseWriter, r *http.Request) {
+	type req struct {
+		Email string `json:"email"`
+	}
+	arg, err := handleParse[req](w, r)
+	if err != nil {
+		return
+	}
+	user, err := c.db.CreateUser(context.Background(), arg.Email)
+	if err != nil {
+		log.Printf("Failed to create user with error: %s", err.Error())
+		respondWithError(w, 500, "Failed to create user")
+		return
+	}
+	respondWithJSON(w, 201, user)
 }
 
 func healthcheck(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(200)
 	w.Write([]byte("OK"))
+}
+
+func handleParse[T any](w http.ResponseWriter, r *http.Request) (T, error) {
+	decoder := json.NewDecoder(r.Body)
+	var val T
+	if err := decoder.Decode(&val); err != nil {
+		log.Printf("Error decoding parameters: %s", err)
+		respondWithError(w, 500, fmt.Sprintf("Error decoding body: %s", err))
+		return val, err
+	}
+	return val, nil
 }
 
 func respondWithError(w http.ResponseWriter, code int, msg string) {
@@ -88,11 +125,8 @@ func validateChirp(w http.ResponseWriter, r *http.Request) {
 		Cleaned_Body string `json:"cleaned_body"`
 	}
 
-	decoder := json.NewDecoder(r.Body)
-	args := params{}
-	if error := decoder.Decode(&args); error != nil {
-		log.Printf("Error decoding parameters: %s", error)
-		respondWithError(w, 500, fmt.Sprintf("Error decoding parameters: %s", error))
+	args, err := handleParse[params](w, r)
+	if err != nil {
 		return
 	}
 
@@ -106,12 +140,20 @@ func validateChirp(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	stats := stats{}
+	godotenv.Load()
+	dbUrl := os.Getenv("DB_URL")
+	db, err := sql.Open("postgres", dbUrl)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	cfg := apiConfig{db: database.New(db)}
 	mux := http.NewServeMux()
-	mux.Handle("/app/", http.StripPrefix("/app", stats.middlewareMetricsInc(http.FileServer(http.Dir("./")))))
+	mux.Handle("/app/", http.StripPrefix("/app", cfg.middlewareMetricsInc(http.FileServer(http.Dir("./")))))
 	mux.HandleFunc("POST /api/validate_chirp", validateChirp)
-	mux.HandleFunc("GET /admin/metrics", stats.hitsMetricsHandler)
-	mux.HandleFunc("POST /admin/reset", stats.resetMetricsHandler)
+	mux.HandleFunc("POST /api/users", cfg.addUser)
+	mux.HandleFunc("GET /admin/metrics", cfg.hitsMetricsHandler)
+	mux.HandleFunc("POST /admin/reset", cfg.resetHandler)
 	mux.HandleFunc("GET /api/healthz", healthcheck)
 	server := http.Server{Handler: mux, Addr: ":8080"}
 	server.ListenAndServe()
