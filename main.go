@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"sync/atomic"
 )
@@ -41,10 +43,57 @@ func healthcheck(w http.ResponseWriter, _ *http.Request) {
 	w.Write([]byte("OK"))
 }
 
+func validateChirp(w http.ResponseWriter, r *http.Request) {
+	type params struct {
+		Body string `json:"body"`
+	}
+	type err struct {
+		Error string `json:"error"`
+	}
+	type ok struct {
+		Valid bool `json:"valid"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	args := params{}
+	if error := decoder.Decode(&args); error != nil {
+		log.Printf("Error decoding parameters: %s", error)
+		w.WriteHeader(500)
+		dat, error2 := json.Marshal(err{Error: error.Error()})
+		if error2 != nil {
+			log.Printf("Error encoding output error: %s for error %s", error2, error)
+			return
+		}
+		w.Write(dat)
+		return
+	}
+
+	if len(args.Body) > 140 {
+		w.WriteHeader(400)
+		dat, error2 := json.Marshal(err{Error: "Chirp is too long"})
+		if error2 != nil {
+			log.Printf("Error encoding 'Chirp is too long' response with err: %s", error2)
+			return
+		}
+		w.Write(dat)
+		return
+	}
+
+	w.WriteHeader(200)
+	dat, error2 := json.Marshal(ok{Valid: true})
+	if error2 != nil {
+		log.Printf("Error encoding success response with err: %s", error2)
+		return
+	}
+	w.Write(dat)
+
+}
+
 func main() {
 	stats := stats{}
 	mux := http.NewServeMux()
 	mux.Handle("/app/", http.StripPrefix("/app", stats.middlewareMetricsInc(http.FileServer(http.Dir("./")))))
+	mux.HandleFunc("POST /api/validate_chirp", validateChirp)
 	mux.HandleFunc("GET /admin/metrics", stats.hitsMetricsHandler)
 	mux.HandleFunc("POST /admin/reset", stats.resetMetricsHandler)
 	mux.HandleFunc("GET /api/healthz", healthcheck)
