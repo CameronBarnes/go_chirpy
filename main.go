@@ -98,6 +98,30 @@ func (c *apiConfig) getChirps(w http.ResponseWriter, _ *http.Request) {
 	respondWithJSON(w, 200, chirps)
 }
 
+func (c *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("chirpID")
+	if id == "" {
+		respondWithError(w, 404, "Chirp Not Found")
+		return
+	}
+	uuid, err := uuid.Parse(id)
+	if err != nil {
+		respondWithError(w, 400, "UUID provided is not valid")
+		return
+	}
+	chirp, err := c.db.GetChirp(context.Background(), uuid)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			respondWithError(w, 404, "Chirp Not Found")
+		} else {
+			log.Println(err)
+			respondWithError(w, 500, "Failed to get Chirp")
+		}
+		return
+	}
+	respondWithJSON(w, 200, chirp)
+}
+
 func healthcheck(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(200)
@@ -171,6 +195,7 @@ func main() {
 	mux.Handle("/app/", http.StripPrefix("/app", cfg.middlewareMetricsInc(http.FileServer(http.Dir("./")))))
 	mux.HandleFunc("POST /api/chirps", cfg.addChirp)
 	mux.HandleFunc("GET /api/chirps", cfg.getChirps)
+	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.getChirp)
 	mux.HandleFunc("POST /api/users", cfg.addUser)
 	mux.HandleFunc("GET /admin/metrics", cfg.hitsMetricsHandler)
 	mux.HandleFunc("POST /admin/reset", cfg.resetHandler)
