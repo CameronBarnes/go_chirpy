@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/cameronbarnes/go_chirpy/internal/auth"
 	"github.com/cameronbarnes/go_chirpy/internal/database"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
@@ -51,19 +52,47 @@ func (c *apiConfig) resetHandler(w http.ResponseWriter, _ *http.Request) {
 
 func (c *apiConfig) addUser(w http.ResponseWriter, r *http.Request) {
 	type req struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 	arg, err := handleParse[req](w, r)
 	if err != nil {
 		return
 	}
-	user, err := c.db.CreateUser(context.Background(), arg.Email)
+	hash, err := auth.HashPassword(arg.Password)
+	if err != nil {
+		respondWithError(w, 400, "Password is not valid")
+		return
+	}
+	user, err := c.db.CreateUser(context.Background(), database.CreateUserParams{Email: strings.ToLower(arg.Email), HashedPassword: hash})
 	if err != nil {
 		log.Printf("Failed to create user with error: %s", err.Error())
 		respondWithError(w, 500, "Failed to create user")
 		return
 	}
 	respondWithJSON(w, 201, user)
+}
+
+func (c *apiConfig) login(w http.ResponseWriter, r *http.Request) {
+	type req struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	arg, err := handleParse[req](w, r)
+	if err != nil {
+		return
+	}
+	user, err := c.db.GetUser(context.Background(), strings.ToLower(arg.Email))
+	if err != nil {
+		respondWithError(w, 401, "Unauthorized")
+		return
+	}
+	check := auth.CheckPassword(arg.Password, user.HashedPassword)
+	if check != nil {
+		respondWithError(w, 401, "Unauthorized")
+		return
+	}
+	respondWithJSON(w, 200, database.CreateUserRow{Email: user.Email, CreatedAt: user.CreatedAt, UpdatedAt: user.UpdatedAt, ID: user.ID})
 }
 
 func (c *apiConfig) addChirp(w http.ResponseWriter, r *http.Request) {
@@ -197,6 +226,7 @@ func main() {
 	mux.HandleFunc("GET /api/chirps", cfg.getChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.getChirp)
 	mux.HandleFunc("POST /api/users", cfg.addUser)
+	mux.HandleFunc("POST /api/login", cfg.login)
 	mux.HandleFunc("GET /admin/metrics", cfg.hitsMetricsHandler)
 	mux.HandleFunc("POST /admin/reset", cfg.resetHandler)
 	mux.HandleFunc("GET /api/healthz", healthcheck)
