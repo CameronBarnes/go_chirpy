@@ -77,21 +77,12 @@ func (c *apiConfig) addUser(w http.ResponseWriter, r *http.Request) {
 
 func (c *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 	type req struct {
-		Email      string `json:"email"`
-		Password   string `json:"password"`
-		ExpiryTime int64  `json:"expires_in_seconds"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 	arg, err := handleParse[req](w, r)
 	if err != nil {
 		return
-	}
-	var expiry time.Duration
-	if arg.ExpiryTime == 0 {
-		expiry = time.Hour
-	} else if time.Duration(arg.ExpiryTime)*time.Second > time.Hour {
-		expiry = time.Hour
-	} else {
-		expiry = time.Duration(arg.ExpiryTime) * time.Second
 	}
 	user, err := c.db.GetUserFromEmail(context.Background(), strings.ToLower(arg.Email))
 	if err != nil {
@@ -103,18 +94,30 @@ func (c *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, 401, "Unauthorized")
 		return
 	}
-	token, err := auth.MakeJWT(user.ID, c.jwtSecret, expiry)
+	token, err := auth.MakeJWT(user.ID, c.jwtSecret, time.Hour)
 	if err != nil {
 		log.Printf("Failed to make JWT with error :%v", err)
 		respondWithError(w, 500, "Failed to build auth")
 		return
 	}
-	userOutFromLogin(w, 200, user, token)
+	refresh_str, err := auth.MakeRefreshToken()
+	if err != nil {
+		log.Printf("Failed to make refresh token string with error: %v", err)
+		respondWithError(w, 500, "Failed to build auth")
+		return
+	}
+	_, err2 := c.db.CreateRefreshToken(context.Background(), database.CreateRefreshTokenParams{UserID: user.ID, Token: refresh_str, ExpiresAt: time.Now().Add(time.Hour * 24 * 60)})
+	if err2 != nil {
+		log.Printf("Failed to create refresh token with error: %v", err2)
+		respondWithError(w, 500, "Failed to build auth")
+		return
+	}
+	userOutFromLogin(w, 200, user, token, refresh_str)
 }
 
 func (c *apiConfig) addChirp(w http.ResponseWriter, r *http.Request, user database.GetUserRow) {
 	type chirpArgs struct {
-		Body   string    `json:"body"`
+		Body string `json:"body"`
 	}
 	arg, err := handleParse[chirpArgs](w, r)
 	if err != nil {
@@ -167,15 +170,58 @@ func (c *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
 	respondWithJSON(w, 200, chirp)
 }
 
-func userOutFromLogin(w http.ResponseWriter, code int, obj database.User, token string) {
+func userOutFromLogin(w http.ResponseWriter, code int, obj database.User, jwt, refresh string) {
 	type user_out struct {
-		ID        uuid.UUID `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Email     string    `json:"email"`
-		Token     string    `json:"token"`
+		ID           uuid.UUID `json:"id"`
+		CreatedAt    time.Time `json:"created_at"`
+		UpdatedAt    time.Time `json:"updated_at"`
+		Email        string    `json:"email"`
+		Token        string    `json:"token"`
+		RefreshToken string    `json:"refresh_token"`
 	}
-	respondWithJSON(w, code, user_out{ID: obj.ID, CreatedAt: obj.CreatedAt, UpdatedAt: obj.UpdatedAt, Email: obj.Email, Token: token})
+	respondWithJSON(w, code, user_out{ID: obj.ID, CreatedAt: obj.CreatedAt, UpdatedAt: obj.UpdatedAt, Email: obj.Email, Token: jwt, RefreshToken: refresh})
+}
+
+func (c *apiConfig) refresh(w http.ResponseWriter, r *http.Request) {
+	type out_struct struct {
+		Token string `json:"token"`
+	}
+	token_str, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, 401, "Unauthorized")
+		return
+	}
+	refresh_token, err := c.db.GetRefreshToken(context.Background(), token_str)
+	if err != nil {
+		respondWithError(w, 401, "Unauthorized")
+		return
+	}
+	if refresh_token.RevokedAt.Valid || refresh_token.ExpiresAt.Before(time.Now()) {
+		respondWithError(w, 401, "Unauthorized")
+		return
+	}
+	token, err := auth.MakeJWT(refresh_token.UserID, c.jwtSecret, time.Hour)
+	if err != nil {
+		log.Printf("Failed to make JWT with error :%v", err)
+		respondWithError(w, 500, "Failed to build auth")
+		return
+	}
+	respondWithJSON(w, 200, out_struct{Token: token})
+}
+
+func (c *apiConfig) revoke(w http.ResponseWriter, r *http.Request) {
+	token_str, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, 401, "Unauthorized")
+		return
+	}
+	err2 := c.db.ExpireToken(context.Background(), token_str)
+	if err2 != nil {
+		log.Printf("Failed to revoke token with error: %v", err2)
+		respondWithError(w, 500, "Failed to revoke token")
+		return
+	}
+	w.WriteHeader(204)
 }
 
 func healthcheck(w http.ResponseWriter, _ *http.Request) {
@@ -255,6 +301,8 @@ func main() {
 	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.getChirp)
 	mux.HandleFunc("POST /api/users", cfg.addUser)
 	mux.HandleFunc("POST /api/login", cfg.login)
+	mux.HandleFunc("POST /api/refresh", cfg.refresh)
+	mux.HandleFunc("POST /api/revoke", cfg.revoke)
 	mux.HandleFunc("GET /admin/metrics", cfg.hitsMetricsHandler)
 	mux.HandleFunc("POST /admin/reset", cfg.resetHandler)
 	mux.HandleFunc("GET /api/healthz", healthcheck)
