@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"sync/atomic"
 
 	"github.com/cameronbarnes/go_chirpy/internal/database"
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
@@ -62,6 +64,28 @@ func (c *apiConfig) addUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondWithJSON(w, 201, user)
+}
+
+func (c *apiConfig) addChirp(w http.ResponseWriter, r *http.Request) {
+	type chirpArgs struct {
+		Body   string    `json:"body"`
+		UserID uuid.UUID `json:"user_id"`
+	}
+	arg, err := handleParse[chirpArgs](w, r)
+	if err != nil {
+		return
+	}
+	body, err := validateChirp(arg.Body)
+	if err != nil {
+		respondWithError(w, 400, err.Error())
+		return
+	}
+	chirp, err := c.db.AddChirp(context.Background(), database.AddChirpParams{Body: body, UserID: arg.UserID})
+	if err != nil {
+		respondWithError(w, 500, err.Error())
+		return
+	}
+	respondWithJSON(w, 201, chirp)
 }
 
 func healthcheck(w http.ResponseWriter, _ *http.Request) {
@@ -116,27 +140,12 @@ func cleanStr(input string, bad string) string {
 	return strings.Join(out, " ")
 }
 
-func validateChirp(w http.ResponseWriter, r *http.Request) {
-	type params struct {
-		Body string `json:"body"`
+func validateChirp(text string) (string, error) {
+	if len(text) > 140 {
+		return "", errors.New("Chirp is too long")
 	}
 
-	type ok struct {
-		Cleaned_Body string `json:"cleaned_body"`
-	}
-
-	args, err := handleParse[params](w, r)
-	if err != nil {
-		return
-	}
-
-	if len(args.Body) > 140 {
-		respondWithError(w, 400, "Chirp is too long")
-		return
-	}
-
-	respondWithJSON(w, 200, ok{Cleaned_Body: cleanStr(cleanStr(cleanStr(args.Body, "kerfuffle"), "sharbert"), "fornax")})
-
+	return cleanStr(cleanStr(cleanStr(text, "kerfuffle"), "sharbert"), "fornax"), nil
 }
 
 func main() {
@@ -150,7 +159,7 @@ func main() {
 	cfg := apiConfig{db: database.New(db)}
 	mux := http.NewServeMux()
 	mux.Handle("/app/", http.StripPrefix("/app", cfg.middlewareMetricsInc(http.FileServer(http.Dir("./")))))
-	mux.HandleFunc("POST /api/validate_chirp", validateChirp)
+	mux.HandleFunc("POST /api/chirps", cfg.addChirp)
 	mux.HandleFunc("POST /api/users", cfg.addUser)
 	mux.HandleFunc("GET /admin/metrics", cfg.hitsMetricsHandler)
 	mux.HandleFunc("POST /admin/reset", cfg.resetHandler)
