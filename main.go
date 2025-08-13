@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/cameronbarnes/go_chirpy/internal/auth"
 	"github.com/cameronbarnes/go_chirpy/internal/database"
@@ -22,6 +23,7 @@ import (
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
+	jwtSecret      string
 }
 
 func (c *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -75,14 +77,23 @@ func (c *apiConfig) addUser(w http.ResponseWriter, r *http.Request) {
 
 func (c *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 	type req struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email      string `json:"email"`
+		Password   string `json:"password"`
+		ExpiryTime int64  `json:"expires_in_seconds"`
 	}
 	arg, err := handleParse[req](w, r)
 	if err != nil {
 		return
 	}
-	user, err := c.db.GetUser(context.Background(), strings.ToLower(arg.Email))
+	var expiry time.Duration
+	if arg.ExpiryTime == 0 {
+		expiry = time.Hour
+	} else if time.Duration(arg.ExpiryTime)*time.Second > time.Hour {
+		expiry = time.Hour
+	} else {
+		expiry = time.Duration(arg.ExpiryTime) * time.Second
+	}
+	user, err := c.db.GetUserFromEmail(context.Background(), strings.ToLower(arg.Email))
 	if err != nil {
 		respondWithError(w, 401, "Unauthorized")
 		return
@@ -92,13 +103,18 @@ func (c *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, 401, "Unauthorized")
 		return
 	}
-	respondWithJSON(w, 200, database.CreateUserRow{Email: user.Email, CreatedAt: user.CreatedAt, UpdatedAt: user.UpdatedAt, ID: user.ID})
+	token, err := auth.MakeJWT(user.ID, c.jwtSecret, expiry)
+	if err != nil {
+		log.Printf("Failed to make JWT with error :%v", err)
+		respondWithError(w, 500, "Failed to build auth")
+		return
+	}
+	userOutFromLogin(w, 200, user, token)
 }
 
-func (c *apiConfig) addChirp(w http.ResponseWriter, r *http.Request) {
+func (c *apiConfig) addChirp(w http.ResponseWriter, r *http.Request, user database.GetUserRow) {
 	type chirpArgs struct {
 		Body   string    `json:"body"`
-		UserID uuid.UUID `json:"user_id"`
 	}
 	arg, err := handleParse[chirpArgs](w, r)
 	if err != nil {
@@ -109,7 +125,7 @@ func (c *apiConfig) addChirp(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, 400, err.Error())
 		return
 	}
-	chirp, err := c.db.AddChirp(context.Background(), database.AddChirpParams{Body: body, UserID: arg.UserID})
+	chirp, err := c.db.AddChirp(context.Background(), database.AddChirpParams{Body: body, UserID: user.ID})
 	if err != nil {
 		respondWithError(w, 500, err.Error())
 		return
@@ -149,6 +165,17 @@ func (c *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondWithJSON(w, 200, chirp)
+}
+
+func userOutFromLogin(w http.ResponseWriter, code int, obj database.User, token string) {
+	type user_out struct {
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Email     string    `json:"email"`
+		Token     string    `json:"token"`
+	}
+	respondWithJSON(w, code, user_out{ID: obj.ID, CreatedAt: obj.CreatedAt, UpdatedAt: obj.UpdatedAt, Email: obj.Email, Token: token})
 }
 
 func healthcheck(w http.ResponseWriter, _ *http.Request) {
@@ -214,15 +241,16 @@ func validateChirp(text string) (string, error) {
 func main() {
 	godotenv.Load()
 	dbUrl := os.Getenv("DB_URL")
+	jwtSecret := os.Getenv("JWT_SECRET")
 	db, err := sql.Open("postgres", dbUrl)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-	cfg := apiConfig{db: database.New(db)}
+	cfg := apiConfig{db: database.New(db), jwtSecret: jwtSecret}
 	mux := http.NewServeMux()
 	mux.Handle("/app/", http.StripPrefix("/app", cfg.middlewareMetricsInc(http.FileServer(http.Dir("./")))))
-	mux.HandleFunc("POST /api/chirps", cfg.addChirp)
+	mux.HandleFunc("POST /api/chirps", cfg.getUserMiddleware(cfg.addChirp))
 	mux.HandleFunc("GET /api/chirps", cfg.getChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.getChirp)
 	mux.HandleFunc("POST /api/users", cfg.addUser)

@@ -54,12 +54,36 @@ func (q *Queries) DeleteAll(ctx context.Context) error {
 }
 
 const getUser = `-- name: GetUser :one
+SELECT id, created_at, updated_at, email FROM users
+WHERE id = $1
+`
+
+type GetUserRow struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
+}
+
+func (q *Queries) GetUser(ctx context.Context, id uuid.UUID) (GetUserRow, error) {
+	row := q.db.QueryRowContext(ctx, getUser, id)
+	var i GetUserRow
+	err := row.Scan(
+		&i.ID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Email,
+	)
+	return i, err
+}
+
+const getUserFromEmail = `-- name: GetUserFromEmail :one
 SELECT id, created_at, updated_at, email, hashed_password FROM users
 WHERE email = $1
 `
 
-func (q *Queries) GetUser(ctx context.Context, email string) (User, error) {
-	row := q.db.QueryRowContext(ctx, getUser, email)
+func (q *Queries) GetUserFromEmail(ctx context.Context, email string) (User, error) {
+	row := q.db.QueryRowContext(ctx, getUserFromEmail, email)
 	var i User
 	err := row.Scan(
 		&i.ID,

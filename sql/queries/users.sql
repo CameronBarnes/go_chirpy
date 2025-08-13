@@ -5,9 +5,13 @@ VALUES (
 )
 RETURNING id, email, created_at, updated_at;
 
--- name: GetUser :one
+-- name: GetUserFromEmail :one
 SELECT * FROM users
 WHERE email = $1;
+
+-- name: GetUser :one
+SELECT id, created_at, updated_at, email FROM users
+WHERE id = $1;
 
 -- name: DeleteAll :exec
 DELETE FROM users;
