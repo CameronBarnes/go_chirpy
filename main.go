@@ -88,6 +88,16 @@ func (c *apiConfig) addChirp(w http.ResponseWriter, r *http.Request) {
 	respondWithJSON(w, 201, chirp)
 }
 
+func (c *apiConfig) getChirps(w http.ResponseWriter, _ *http.Request) {
+	chirps, err := c.db.AllChirps(context.Background())
+	if err != nil {
+		log.Printf("Failed to get chirps with err: %s", err)
+		respondWithError(w, 500, "Failed to get chirps")
+		return
+	}
+	respondWithJSON(w, 200, chirps)
+}
+
 func healthcheck(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(200)
@@ -160,6 +170,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/app/", http.StripPrefix("/app", cfg.middlewareMetricsInc(http.FileServer(http.Dir("./")))))
 	mux.HandleFunc("POST /api/chirps", cfg.addChirp)
+	mux.HandleFunc("GET /api/chirps", cfg.getChirps)
 	mux.HandleFunc("POST /api/users", cfg.addUser)
 	mux.HandleFunc("GET /admin/metrics", cfg.hitsMetricsHandler)
 	mux.HandleFunc("POST /admin/reset", cfg.resetHandler)
