@@ -137,6 +137,34 @@ func (c *apiConfig) addChirp(w http.ResponseWriter, r *http.Request, user databa
 	respondWithJSON(w, 201, chirp)
 }
 
+func (c *apiConfig) deleteChirp(w http.ResponseWriter, r *http.Request, user database.GetUserRow) {
+	id := r.PathValue("chirpID")
+	if id == "" {
+		respondWithError(w, 404, "Chirp Not Found")
+		return
+	}
+	uuid, err := uuid.Parse(id)
+	if err != nil {
+		respondWithError(w, 400, "UUID provided is not valid")
+		return
+	}
+	chirp, err := c.db.GetChirp(context.Background(), uuid)
+	if err != nil {
+		respondWithError(w, 404, "Chirp Not Found")
+		return
+	}
+	if chirp.UserID != user.ID {
+		w.WriteHeader(403)
+		return
+	}
+	_, err2 := c.db.DeleteChirp(context.Background(), database.DeleteChirpParams{ID: uuid, UserID: user.ID})
+	if err2 != nil {
+		respondWithError(w, 500, "Failed to delete Chirp")
+		return
+	}
+	w.WriteHeader(204)
+}
+
 func (c *apiConfig) updateUser(w http.ResponseWriter, r *http.Request, user database.GetUserRow) {
 	type updateArgs struct {
 		Email    string `json:"email"`
@@ -319,6 +347,7 @@ func main() {
 	mux.HandleFunc("POST /api/chirps", cfg.getUserMiddleware(cfg.addChirp))
 	mux.HandleFunc("GET /api/chirps", cfg.getChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.getChirp)
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}", cfg.getUserMiddleware(cfg.deleteChirp))
 	mux.HandleFunc("POST /api/users", cfg.addUser)
 	mux.HandleFunc("PUT /api/users", cfg.getUserMiddleware(cfg.updateUser))
 	mux.HandleFunc("POST /api/login", cfg.login)
