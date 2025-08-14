@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -209,6 +210,9 @@ func (c *apiConfig) getChirps(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		chirps_out = chirps
+	}
+	if r.URL.Query().Get("sort") == "desc" {
+		sort.Slice(chirps_out, func(i, j int) bool { return chirps_out[i].CreatedAt.After(chirps_out[j].CreatedAt) })
 	}
 	respondWithJSON(w, 200, chirps_out)
 }
