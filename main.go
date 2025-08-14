@@ -185,14 +185,32 @@ func (c *apiConfig) updateUser(w http.ResponseWriter, r *http.Request, user data
 	respondWithJSON(w, 200, updated)
 }
 
-func (c *apiConfig) getChirps(w http.ResponseWriter, _ *http.Request) {
-	chirps, err := c.db.AllChirps(context.Background())
-	if err != nil {
-		log.Printf("Failed to get chirps with err: %s", err)
-		respondWithError(w, 500, "Failed to get chirps")
-		return
+func (c *apiConfig) getChirps(w http.ResponseWriter, r *http.Request) {
+	var chirps_out []database.Chirp
+	author_id := r.URL.Query().Get("author_id")
+	if author_id == "" {
+		chirps, err := c.db.AllChirps(context.Background())
+		if err != nil {
+			log.Printf("Failed to get chirps with err: %s", err)
+			respondWithError(w, 500, "Failed to get chirps")
+			return
+		}
+		chirps_out = chirps
+	} else {
+		id, err := uuid.Parse(author_id)
+		if err != nil {
+			respondWithError(w, 400, "Failed to parse UserID UUID")
+			return
+		}
+		chirps, err := c.db.AllChirpsFromUser(context.Background(), id)
+		if err != nil {
+			log.Printf("Failed to get chirps with err: %s", err)
+			respondWithError(w, 500, "Failed to get chirps")
+			return
+		}
+		chirps_out = chirps
 	}
-	respondWithJSON(w, 200, chirps)
+	respondWithJSON(w, 200, chirps_out)
 }
 
 func (c *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
