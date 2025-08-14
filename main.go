@@ -24,6 +24,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
 	jwtSecret      string
+	polkaKey       string
 }
 
 func (c *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -281,6 +282,11 @@ func (c *apiConfig) polkaWebhook(w http.ResponseWriter, r *http.Request) {
 		EventLabel string `json:"event"`
 		Data       data   `json:"data"`
 	}
+	key, err := auth.GetAPIKey(r.Header)
+	if err != nil || key != c.polkaKey {
+		w.WriteHeader(401)
+		return
+	}
 	evnt, err := handleParse[event](w, r)
 	if err != nil {
 		respondWithError(w, 400, "Invalid Event")
@@ -361,12 +367,13 @@ func main() {
 	godotenv.Load()
 	dbUrl := os.Getenv("DB_URL")
 	jwtSecret := os.Getenv("JWT_SECRET")
+	polkaKey := os.Getenv("POLKA_KEY")
 	db, err := sql.Open("postgres", dbUrl)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-	cfg := apiConfig{db: database.New(db), jwtSecret: jwtSecret}
+	cfg := apiConfig{db: database.New(db), jwtSecret: jwtSecret, polkaKey: polkaKey}
 	mux := http.NewServeMux()
 	mux.Handle("/app/", http.StripPrefix("/app", cfg.middlewareMetricsInc(http.FileServer(http.Dir("./")))))
 	mux.HandleFunc("POST /api/chirps", cfg.getUserMiddleware(cfg.addChirp))

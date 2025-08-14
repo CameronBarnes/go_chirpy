@@ -13,3 +13,11 @@ func GetBearerToken(headers http.Header) (string, error) {
 	}
 	return strings.TrimPrefix(val, "Bearer "), nil
 }
+
+func GetAPIKey(headers http.Header) (string, error) {
+	val := headers.Get("Authorization")
+	if val == "" {
+		return "", errors.New("Auth header is missing")
+	}
+	return strings.TrimPrefix(val, "ApiKey "), nil
+}
