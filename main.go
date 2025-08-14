@@ -226,8 +226,9 @@ func userOutFromLogin(w http.ResponseWriter, code int, obj database.User, jwt, r
 		Email        string    `json:"email"`
 		Token        string    `json:"token"`
 		RefreshToken string    `json:"refresh_token"`
+		IsChirpyRed  bool      `json:"is_chirpy_red"`
 	}
-	respondWithJSON(w, code, user_out{ID: obj.ID, CreatedAt: obj.CreatedAt, UpdatedAt: obj.UpdatedAt, Email: obj.Email, Token: jwt, RefreshToken: refresh})
+	respondWithJSON(w, code, user_out{ID: obj.ID, CreatedAt: obj.CreatedAt, UpdatedAt: obj.UpdatedAt, Email: obj.Email, Token: jwt, RefreshToken: refresh, IsChirpyRed: obj.IsChirpyRed})
 }
 
 func (c *apiConfig) refresh(w http.ResponseWriter, r *http.Request) {
@@ -268,6 +269,30 @@ func (c *apiConfig) revoke(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Failed to revoke token with error: %v", err2)
 		respondWithError(w, 500, "Failed to revoke token")
 		return
+	}
+	w.WriteHeader(204)
+}
+
+func (c *apiConfig) polkaWebhook(w http.ResponseWriter, r *http.Request) {
+	type data struct {
+		UserID string `json:"user_id"`
+	}
+	type event struct {
+		EventLabel string `json:"event"`
+		Data       data   `json:"data"`
+	}
+	evnt, err := handleParse[event](w, r)
+	if err != nil {
+		respondWithError(w, 400, "Invalid Event")
+		return
+	}
+	if evnt.EventLabel == "user.upgraded" {
+		id, err := uuid.Parse(evnt.Data.UserID)
+		if err != nil {
+			respondWithError(w, 400, "Invalid UserID")
+			return
+		}
+		c.db.SetChirpyRedForUser(context.Background(), database.SetChirpyRedForUserParams{ID: id, IsChirpyRed: true})
 	}
 	w.WriteHeader(204)
 }
@@ -348,6 +373,7 @@ func main() {
 	mux.HandleFunc("GET /api/chirps", cfg.getChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.getChirp)
 	mux.HandleFunc("DELETE /api/chirps/{chirpID}", cfg.getUserMiddleware(cfg.deleteChirp))
+	mux.HandleFunc("POST /api/polka/webhooks", cfg.polkaWebhook)
 	mux.HandleFunc("POST /api/users", cfg.addUser)
 	mux.HandleFunc("PUT /api/users", cfg.getUserMiddleware(cfg.updateUser))
 	mux.HandleFunc("POST /api/login", cfg.login)
