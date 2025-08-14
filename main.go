@@ -121,6 +121,7 @@ func (c *apiConfig) addChirp(w http.ResponseWriter, r *http.Request, user databa
 	}
 	arg, err := handleParse[chirpArgs](w, r)
 	if err != nil {
+		respondWithError(w, 400, "Invalid Request")
 		return
 	}
 	body, err := validateChirp(arg.Body)
@@ -134,6 +135,25 @@ func (c *apiConfig) addChirp(w http.ResponseWriter, r *http.Request, user databa
 		return
 	}
 	respondWithJSON(w, 201, chirp)
+}
+
+func (c *apiConfig) updateUser(w http.ResponseWriter, r *http.Request, user database.GetUserRow) {
+	type updateArgs struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	args, err := handleParse[updateArgs](w, r)
+	if err != nil {
+		respondWithError(w, 400, "Invalid Request")
+		return
+	}
+	hashed, err := auth.HashPassword(args.Password)
+	if err != nil {
+		respondWithError(w, 400, "Password is not valid")
+		return
+	}
+	updated, err := c.db.UpdateUser(context.Background(), database.UpdateUserParams{ID: user.ID, Email: args.Email, HashedPassword: hashed})
+	respondWithJSON(w, 200, updated)
 }
 
 func (c *apiConfig) getChirps(w http.ResponseWriter, _ *http.Request) {
@@ -300,6 +320,7 @@ func main() {
 	mux.HandleFunc("GET /api/chirps", cfg.getChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.getChirp)
 	mux.HandleFunc("POST /api/users", cfg.addUser)
+	mux.HandleFunc("PUT /api/users", cfg.getUserMiddleware(cfg.updateUser))
 	mux.HandleFunc("POST /api/login", cfg.login)
 	mux.HandleFunc("POST /api/refresh", cfg.refresh)
 	mux.HandleFunc("POST /api/revoke", cfg.revoke)
